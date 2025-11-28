@@ -3,11 +3,11 @@
     "default": {
       "net": ["raw.githubusercontent.com"],
       "read": ["."],
-      "write": ["./pac.txt"],
+      "write": ["."],
       "env": true
     }
   },
   "tasks": {
-    "start": "deno run -P gfwlist2pac.ts"
+    "start": "deno run -P gfwlist2pac.ts --user-rules ./user-rules.txt"
   }
 }
