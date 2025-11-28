@@ -22,7 +22,7 @@ deno run -A gfwlist2pac.ts -i gfwlist.txt
 | `-i, --input <file>` | 本地 GFWList 文件 |
 | `-o, --output <file>` | 输出文件（默认：`pac.txt`） |
 | `-p, --proxy <url>` | 下载代理（默认：`socks5://127.0.0.1:1080`，支持 `HTTP_PROXY` 环境变量） |
-| `--user-rules <file>` | 用户规则文件 |
+| `--user-rules <file>` | 用户规则文件（默认自动加载执行目录下的 `user-rules.txt`） |
 
 ## 输出
 
