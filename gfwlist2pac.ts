@@ -200,6 +200,24 @@ function parseGFWListRules(content: string): ParsedRules {
     // 处理域名后缀规则: ||domain.com
     if (rule.startsWith("||")) {
       const domain = rule.substring(2).split("/")[0].split("^")[0];
+      if (domain) {
+        if (isValidDomain(domain)) {
+          if (isWhite) {
+            rules.whiteDomainSuffixes.add(domain.toLowerCase());
+          } else {
+            rules.domainSuffixes.add(domain.toLowerCase());
+          }
+        } else if (/^[a-zA-Z0-9][-a-zA-Z0-9]*$/.test(domain)) {
+          // 像 ||google 这样的不完整域名，当作关键词处理
+          rules.domainKeywords.add(domain.toLowerCase());
+        }
+      }
+      continue;
+    }
+
+    // 处理 .domain.com 格式（域名后缀匹配）
+    if (rule.startsWith(".")) {
+      const domain = rule.substring(1).split("/")[0].split("^")[0];
       if (domain && isValidDomain(domain)) {
         if (isWhite) {
           rules.whiteDomainSuffixes.add(domain.toLowerCase());
