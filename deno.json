@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "default": {
+      "net": ["raw.githubusercontent.com"],
+      "read": ["."],
+      "write": ["./pac.txt"],
+      "env": true
+    }
+  },
+  "tasks": {
+    "start": "deno run -P gfwlist2pac.ts"
+  }
+}
