@@ -324,8 +324,17 @@ async function main(): Promise<void> {
 
     // 读取用户自定义规则
     let userRulesContent: string[] = [];
-    if (options.userRules) {
-      userRulesContent = await readUserRules(options.userRules);
+    const userRulesPath = options.userRules ?? path.join(Deno.cwd(), "user-rules.txt");
+
+    try {
+      await fs.access(userRulesPath);
+      userRulesContent = await readUserRules(userRulesPath);
+    } catch {
+      if (options.userRules) {
+        // 用户明确指定了文件但不存在，报错
+        throw new Error(`用户规则文件不存在: ${userRulesPath}`);
+      }
+      // 默认文件不存在，静默跳过
     }
 
     // 合并规则

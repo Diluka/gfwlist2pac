@@ -8,6 +8,6 @@
     }
   },
   "tasks": {
-    "start": "deno run -P gfwlist2pac.ts --user-rules ./user-rules.txt"
+    "start": "deno run -P gfwlist2pac.ts"
   }
 }
