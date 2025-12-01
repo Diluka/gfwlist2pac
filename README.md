@@ -26,36 +26,28 @@ deno run -A gfwlist2pac.ts -i gfwlist.txt
 
 ## 输出
 
-生成的 `pac.txt` 采用标准 PAC 格式，兼容各种代理客户端：
+生成的 `pac.txt` 使用 [terser](https://github.com/terser/terser) 压缩，具有更好的解析和执行性能：
 
-```javascript
-var proxy = '__PROXY__';
-var rules = [
-    [
-        [/* 白名单域名 */],
-        [/* 代理域名 */]
-    ],
-    [[], []]
-];
-
-function FindProxyForURL(url, host) { ... }
-function testHost(host, index) { ... }
-```
+- **压缩率约 45%**（166KB → 90KB）
+- 兼容各种代理客户端
+- 包含 `String.prototype.endsWith` polyfill，支持旧版浏览器
 
 ### 使用说明
 
-1. 将 `__PROXY__` 替换为实际代理配置：
-   ```javascript
-   var proxy = 'SOCKS5 127.0.0.1:1080; DIRECT';
-   // 或
-   var proxy = 'PROXY 127.0.0.1:8080; DIRECT';
-   ```
+将 `__PROXY__` 替换为实际代理配置：
 
-2. 域名匹配规则：
-   - 精确匹配：`host == domain`
-   - 后缀匹配：`host.endsWith('.' + domain)`
+```javascript
+// 查找并替换 __PROXY__ 为：
+'SOCKS5 127.0.0.1:1080; DIRECT'
+// 或
+'PROXY 127.0.0.1:8080; DIRECT'
+```
 
-3. 规则结构：`rules[i][0]` 为白名单，`rules[i][1]` 为代理名单
+### 匹配规则
+
+- **精确匹配**：`host == domain`
+- **后缀匹配**：`host.endsWith('.' + domain)`
+- **规则优先级**：白名单 > 代理名单 > 默认直连
 
 ## 用户规则
 

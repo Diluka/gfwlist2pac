@@ -169,11 +169,9 @@ Deno.test("未知域名应直连", async () => {
 Deno.test("PAC 变量结构完整性", async () => {
   const pacContent = await Deno.readTextFile("pac.txt");
 
-  // 验证新格式的必要变量存在
-  assertEquals(pacContent.includes("var proxy = '__PROXY__'"), true, "应包含代理变量 proxy");
-  assertEquals(pacContent.includes("var rules = ["), true, "应包含规则数组 rules");
-  assertEquals(pacContent.includes("function FindProxyForURL"), true, "应包含 FindProxyForURL 函数");
-  assertEquals(pacContent.includes("function testHost"), true, "应包含 testHost 函数");
-  assertEquals(pacContent.includes("return 'DIRECT'"), true, "应包含 DIRECT 返回值");
-  assertEquals(pacContent.includes(": proxy"), true, "应包含 proxy 返回值");
+  // 验证 PAC 文件的必要元素存在（压缩后格式可能变化）
+  assertEquals(pacContent.includes("__PROXY__"), true, "应包含代理占位符 __PROXY__");
+  assertEquals(pacContent.includes("FindProxyForURL"), true, "应包含 FindProxyForURL 函数");
+  assertEquals(pacContent.includes("testHost"), true, "应包含 testHost 函数");
+  assertEquals(pacContent.includes("DIRECT"), true, "应包含 DIRECT 返回值");
 });

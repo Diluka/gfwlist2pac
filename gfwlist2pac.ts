@@ -16,6 +16,7 @@
 import { parseArgs } from "node:util";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { minify } from "terser";
 
 // GFWList 默认下载地址
 const GFWLIST_URL =
@@ -421,14 +422,38 @@ async function main(): Promise<void> {
     console.log("正在生成 PAC 文件...");
     const pacContent = generatePAC(rules);
 
+    // 压缩 PAC 文件
+    console.log("正在压缩 PAC 文件...");
+    const minified = await minify(pacContent, {
+      compress: {
+        dead_code: true,
+        drop_console: false,
+        passes: 2,
+      },
+      mangle: {
+        toplevel: false,  // 保留顶层变量名（proxy, rules, FindProxyForURL）
+        reserved: ["FindProxyForURL", "proxy", "rules"],  // 保留 PAC 必需的名称
+      },
+      format: {
+        comments: false,
+      },
+    });
+
+    if (!minified.code) {
+      throw new Error("压缩失败");
+    }
+
     // 写入文件
     const outputPath = path.resolve(options.output);
-    await fs.writeFile(outputPath, pacContent, { encoding: "utf-8" });
+    await fs.writeFile(outputPath, minified.code, { encoding: "utf-8" });
     console.log(`PAC 文件已生成: ${outputPath}`);
 
     // 输出统计信息
-    const stats = await fs.stat(outputPath);
-    console.log(`文件大小: ${(stats.size / 1024).toFixed(2)} KB`);
+    const originalSize = pacContent.length;
+    const compressedSize = minified.code.length;
+    console.log(`原始大小: ${(originalSize / 1024).toFixed(2)} KB`);
+    console.log(`压缩后大小: ${(compressedSize / 1024).toFixed(2)} KB`);
+    console.log(`压缩率: ${((1 - compressedSize / originalSize) * 100).toFixed(1)}%`);
   } catch (error) {
     console.error("错误:", error instanceof Error ? error.message : error);
     Deno.exit(1);

@@ -1,6 +1,7 @@
 {
   "imports": {
-    "@std/assert": "jsr:@std/assert@1"
+    "@std/assert": "jsr:@std/assert@1",
+    "terser": "npm:terser@5"
   },
   "permissions": {
     "default": {
