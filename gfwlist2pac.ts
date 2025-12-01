@@ -16,7 +16,7 @@
 import { parseArgs } from "node:util";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { minify } from "terser";
+import { minify } from "npm:terser";
 
 // GFWList 默认下载地址
 const GFWLIST_URL =
