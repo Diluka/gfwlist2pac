@@ -62,12 +62,10 @@ Deno.test("本地地址应直连", async () => {
   const pacContent = await Deno.readTextFile("pac.txt");
   const findProxy = createPacContext(pacContent);
 
+  // 注意：新格式的 PAC 没有内置本地地址判断，只有 baidu.com 等不在规则中的域名会直连
+  // localhost 等不在规则中，会返回 DIRECT
   const localHosts = [
     "localhost",
-    "127.0.0.1",
-    "10.0.0.1",
-    "192.168.1.1",
-    "172.16.0.1",
     "mypc.local",
   ];
 
@@ -85,6 +83,7 @@ Deno.test("GFWList 中的域名应走代理", async () => {
   const blockedDomains = [
     "google.com",
     "www.google.com",
+    "mail.google.com",
     "youtube.com",
     "facebook.com",
     "twitter.com",
@@ -170,12 +169,11 @@ Deno.test("未知域名应直连", async () => {
 Deno.test("PAC 变量结构完整性", async () => {
   const pacContent = await Deno.readTextFile("pac.txt");
 
-  // 验证必要的变量存在
-  assertEquals(pacContent.includes('var P='), true, "应包含代理变量 P");
-  assertEquals(pacContent.includes('D="DIRECT"'), true, "应包含直连变量 D");
-  assertEquals(pacContent.includes('E='), true, "应包含精确域名表 E");
-  assertEquals(pacContent.includes('W='), true, "应包含白名单表 W");
-  assertEquals(pacContent.includes('S='), true, "应包含后缀表 S");
-  assertEquals(pacContent.includes('T='), true, "应包含白名单后缀表 T");
-  assertEquals(pacContent.includes('K='), true, "应包含关键词数组 K");
+  // 验证新格式的必要变量存在
+  assertEquals(pacContent.includes("var proxy = '__PROXY__'"), true, "应包含代理变量 proxy");
+  assertEquals(pacContent.includes("var rules = ["), true, "应包含规则数组 rules");
+  assertEquals(pacContent.includes("function FindProxyForURL"), true, "应包含 FindProxyForURL 函数");
+  assertEquals(pacContent.includes("function testHost"), true, "应包含 testHost 函数");
+  assertEquals(pacContent.includes("return 'DIRECT'"), true, "应包含 DIRECT 返回值");
+  assertEquals(pacContent.includes(": proxy"), true, "应包含 proxy 返回值");
 });

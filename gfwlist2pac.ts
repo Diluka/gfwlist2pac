@@ -290,35 +290,89 @@ function isValidDomain(domain: string): boolean {
 }
 
 function generatePAC(rules: ParsedRules): string {
-  // 构建精确域名哈希表（O(1) 查找）
-  const exactSet: Record<string, 1> = {};
+  // 合并精确域名和域名后缀到代理列表
+  const proxyDomains = new Set<string>();
   for (const d of rules.domains) {
-    exactSet[d] = 1;
+    proxyDomains.add(d);
+  }
+  for (const d of rules.domainSuffixes) {
+    proxyDomains.add(d);
+  }
+  // 关键词也作为域名处理（会通过 endsWith 匹配）
+  for (const k of rules.domainKeywords) {
+    proxyDomains.add(k);
   }
 
-  // 构建白名单精确域名哈希表
-  const whiteExactSet: Record<string, 1> = {};
+  // 合并白名单精确域名和域名后缀
+  const whiteDomains = new Set<string>();
   for (const d of rules.whiteDomains) {
-    whiteExactSet[d] = 1;
+    whiteDomains.add(d);
+  }
+  for (const d of rules.whiteDomainSuffixes) {
+    whiteDomains.add(d);
   }
 
-  // 构建域名后缀哈希表（预计算所有后缀）
-  const suffixSet: Record<string, 1> = {};
-  for (const domain of rules.domainSuffixes) {
-    // 添加域名本身
-    suffixSet[domain] = 1;
-  }
+  // 排序域名列表
+  const sortedProxyDomains = Array.from(proxyDomains).sort();
+  const sortedWhiteDomains = Array.from(whiteDomains).sort();
 
-  // 构建白名单域名后缀哈希表
-  const whiteSuffixSet: Record<string, 1> = {};
-  for (const domain of rules.whiteDomainSuffixes) {
-    whiteSuffixSet[domain] = 1;
-  }
+  // 生成格式化的 PAC 脚本（与模板格式一致）
+  const formatDomainList = (domains: string[]): string => {
+    if (domains.length === 0) return "[]";
+    const lines = domains.map((d, i) => {
+      const comma = i < domains.length - 1 ? "," : "";
+      return `            "${d}"${comma}`;
+    });
+    return `[\n${lines.join("\n")}\n        ]`;
+  };
 
-  const keywords = Array.from(rules.domainKeywords);
+  const pac = `var proxy = '${PAC_PROXY_PLACEHOLDER}';
+var rules = [
+    [
+        ${formatDomainList(sortedWhiteDomains)},
+        ${formatDomainList(sortedProxyDomains)}
+    ],
+    [
+        [],
+        []
+    ]
+];
 
-  // 生成压缩的 PAC 脚本（性能优化版）
-  const pac = `var P="${PAC_PROXY_PLACEHOLDER}",D="DIRECT",E=${JSON.stringify(exactSet)},W=${JSON.stringify(whiteExactSet)},S=${JSON.stringify(suffixSet)},T=${JSON.stringify(whiteSuffixSet)},K=${JSON.stringify(keywords)};function FindProxyForURL(_,h){h=h.toLowerCase();if(h.indexOf(".")<0||h.slice(-6)===".local"||h.slice(0,4)==="127."||h.slice(0,3)==="10."||h.slice(0,8)==="192.168."||h.slice(0,7)==="172.16."||h.slice(0,7)==="172.17."||h.slice(0,7)==="172.18."||h.slice(0,7)==="172.19."||h.slice(0,7)==="172.20."||h.slice(0,7)==="172.21."||h.slice(0,7)==="172.22."||h.slice(0,7)==="172.23."||h.slice(0,7)==="172.24."||h.slice(0,7)==="172.25."||h.slice(0,7)==="172.26."||h.slice(0,7)==="172.27."||h.slice(0,7)==="172.28."||h.slice(0,7)==="172.29."||h.slice(0,7)==="172.30."||h.slice(0,7)==="172.31.")return D;if(W[h])return D;for(var i=0,p=h;;){if(T[p])return D;i=h.indexOf(".",i);if(i<0)break;p=h.slice(++i)}if(E[h])return P;for(i=0,p=h;;){if(S[p])return P;i=h.indexOf(".",i);if(i<0)break;p=h.slice(++i)}for(i=0;i<K.length;i++)if(h.indexOf(K[i])>=0)return P;return D}`;
+var lastRule = '';
+
+function FindProxyForURL(url, host) {
+    for (var i = 0; i < rules.length; i++) {
+        ret = testHost(host, i);
+        if (ret != undefined)
+            return ret;
+    }
+    return 'DIRECT';
+}
+
+function testHost(host, index) {
+    for (var i = 0; i < rules[index].length; i++) {
+        for (var j = 0; j < rules[index][i].length; j++) {
+            lastRule = rules[index][i][j]
+            if (host == lastRule || host.endsWith('.' + lastRule))
+                return i % 2 == 0 ? 'DIRECT' : proxy;
+        }
+    }
+    lastRule = '';
+}
+
+// REF: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/endsWith
+if (!String.prototype.endsWith) {
+    String.prototype.endsWith = function(searchString, position) {
+        var subjectString = this.toString();
+        if (typeof position !== 'number' || !isFinite(position) || Math.floor(position) !== position || position > subjectString.length) {
+            position = subjectString.length;
+        }
+        position -= searchString.length;
+        var lastIndex = subjectString.indexOf(searchString, position);
+        return lastIndex !== -1 && lastIndex === position;
+  };
+}
+`;
 
   return pac;
 }

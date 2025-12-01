@@ -26,29 +26,36 @@ deno run -A gfwlist2pac.ts -i gfwlist.txt
 
 ## 输出
 
-生成的 `pac.txt` 采用性能优化格式：
-
-- 使用哈希表实现 O(1) 域名查找
-- 单行压缩输出，最小化文件体积
-- `__PROXY__` 占位符，使用前替换为实际代理配置
-
-### 变量说明
-
-| 变量 | 说明 |
-|------|------|
-| `P` | 代理返回值（`__PROXY__` 占位符） |
-| `D` | 直连返回值（`DIRECT`） |
-| `E` | 精确域名匹配表（完全匹配） |
-| `W` | 白名单域名表（直连） |
-| `S` | 域名后缀匹配表（`\|\|domain.com`） |
-| `T` | 白名单后缀表 |
-| `K` | 关键词匹配数组 |
+生成的 `pac.txt` 采用标准 PAC 格式，兼容各种代理客户端：
 
 ```javascript
-// 使用前替换 __PROXY__ 占位符，例如：
-// SOCKS5 127.0.0.1:1080; DIRECT
-// PROXY 127.0.0.1:8080; DIRECT
+var proxy = '__PROXY__';
+var rules = [
+    [
+        [/* 白名单域名 */],
+        [/* 代理域名 */]
+    ],
+    [[], []]
+];
+
+function FindProxyForURL(url, host) { ... }
+function testHost(host, index) { ... }
 ```
+
+### 使用说明
+
+1. 将 `__PROXY__` 替换为实际代理配置：
+   ```javascript
+   var proxy = 'SOCKS5 127.0.0.1:1080; DIRECT';
+   // 或
+   var proxy = 'PROXY 127.0.0.1:8080; DIRECT';
+   ```
+
+2. 域名匹配规则：
+   - 精确匹配：`host == domain`
+   - 后缀匹配：`host.endsWith('.' + domain)`
+
+3. 规则结构：`rules[i][0]` 为白名单，`rules[i][1]` 为代理名单
 
 ## 用户规则
 
@@ -59,4 +66,12 @@ deno run -A gfwlist2pac.ts -i gfwlist.txt
 |https://example.com  # 精确 URL
 @@||direct.com        # 白名单（直连）
 keyword               # 关键词匹配
+```
+
+默认会自动加载执行目录下的 `user-rules.txt` 文件（如果存在）。
+
+## 测试
+
+```powershell
+deno test --allow-read
 ```
