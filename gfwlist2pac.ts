@@ -1,3 +1,4 @@
+#!/usr/bin/env -S deno run --allow-net=raw.githubusercontent.com,127.0.0.1:1080,127.0.0.1:10808,127.0.0.1:10809,127.0.0.1:7890,127.0.0.1:7891 --allow-read=. --allow-write=. --allow-env=HTTP_PROXY,HTTPS_PROXY,ALL_PROXY,http_proxy,https_proxy,all_proxy
 /**
  * GFWList to PAC 转换工具
  * 将 GFWList 转换为 PAC (Proxy Auto-Config) 文件
@@ -8,40 +9,51 @@
  * 选项:
  *   -i, --input <file>     本地 GFWList 文件路径（可选，默认从网络获取）
  *   -o, --output <file>    输出 PAC 文件路径（默认: pac.txt）
- *   -p, --proxy <url>      下载 GFWList 时使用的代理（默认: socks5://127.0.0.1:1080，支持环境变量 HTTP_PROXY/HTTPS_PROXY）
- *   --user-rules <file>    用户自定义规则文件
+ *   -p, --proxy <url>      下载 GFWList 时使用的代理
+ *                          默认自动检测本地代理端口 (1080, 10809, 10808, 7890, 7891)
+ *                          支持环境变量: HTTP_PROXY / HTTPS_PROXY / ALL_PROXY
+ *   --user-rules <file>    用户自定义规则文件（AdBlock 格式）
  *   -h, --help             显示帮助信息
+ *
+ * 输出说明:
+ *   生成的 PAC 文件中 proxy 变量为 __PROXY__ 占位符，
+ *   使用前请替换为实际代理配置，如: SOCKS5 127.0.0.1:1080; DIRECT
+ *
+ * 示例:
+ *   # 自动检测代理下载 GFWList
+ *   deno run -A gfwlist2pac.ts
+ *
+ *   # 指定下载代理
+ *   deno run -A gfwlist2pac.ts -p "http://127.0.0.1:7890"
+ *
+ *   # 使用本地 GFWList 文件（无需网络）
+ *   deno run --allow-read --allow-write gfwlist2pac.ts -i gfwlist.txt
+ *
+ *   # 添加用户自定义规则
+ *   deno run -A gfwlist2pac.ts --user-rules user-rules.txt
  */
-
-import { parseArgs } from "node:util";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import { minify } from "npm:terser";
 
 // GFWList 默认下载地址
 const GFWLIST_URL =
   "https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt";
 
-// 下载时使用的默认代理
-const DEFAULT_DOWNLOAD_PROXY = "socks5://127.0.0.1:1080";
-
 // PAC 文件中 proxy 变量的占位符（固定值）
 const PAC_PROXY_PLACEHOLDER = "__PROXY__";
 
 interface ParsedRules {
-  domains: Set<string>;
-  domainSuffixes: Set<string>;
-  domainKeywords: Set<string>;
-  urlPatterns: Set<string>;
-  regexPatterns: Set<string>;
-  whiteDomains: Set<string>;
-  whiteDomainSuffixes: Set<string>;
+  whitelistDomains: string[];
+  whitelistUrlPatterns: string[];
+  whitelistRegex: string[];
+  proxyDomains: string[];
+  proxyUrlPatterns: string[];
+  proxyRegex: string[];
+  proxyIps: string[];
+  proxyCidrs: string[];
 }
 
 interface Options {
   input?: string;
   output: string;
-  /** 下载 GFWList 时使用的代理 URL */
   proxy?: string;
   userRules?: string;
   help: boolean;
@@ -58,7 +70,7 @@ GFWList to PAC 转换工具
   -i, --input <file>     本地 GFWList 文件路径（可选，默认从网络获取）
   -o, --output <file>    输出 PAC 文件路径（默认: pac.txt）
   -p, --proxy <url>      下载 GFWList 时使用的代理 URL
-                         默认: socks5://127.0.0.1:1080
+                         默认自动检测本地代理端口
                          支持环境变量: HTTP_PROXY / HTTPS_PROXY / ALL_PROXY
   --user-rules <file>    用户自定义规则文件（AdBlock 格式）
   -h, --help             显示帮助信息
@@ -68,7 +80,7 @@ GFWList to PAC 转换工具
   使用前请替换为实际代理配置，如: SOCKS5 127.0.0.1:1080; DIRECT
 
 示例:
-  # 使用默认代理下载 GFWList
+  # 自动检测代理下载 GFWList
   deno run -A gfwlist2pac.ts
 
   # 指定下载代理
@@ -82,300 +94,440 @@ GFWList to PAC 转换工具
 `);
 }
 
-function getProxyFromEnv(): string | undefined {
-  return Deno.env.get("HTTPS_PROXY") ||
-    Deno.env.get("HTTP_PROXY") ||
-    Deno.env.get("ALL_PROXY") ||
-    Deno.env.get("https_proxy") ||
-    Deno.env.get("http_proxy") ||
-    Deno.env.get("all_proxy");
-}
-
 function parseOptions(): Options {
-  const { values } = parseArgs({
-    args: Deno.args,
-    options: {
-      input: { type: "string", short: "i" },
-      output: { type: "string", short: "o", default: "pac.txt" },
-      proxy: { type: "string", short: "p" },
-      "user-rules": { type: "string" },
-      help: { type: "boolean", short: "h", default: false },
-    },
-    allowPositionals: true,
-  });
-
-  // 优先级: 命令行参数 > 环境变量 > 默认值
-  const proxy = (values.proxy as string | undefined) ??
-    getProxyFromEnv() ??
-    DEFAULT_DOWNLOAD_PROXY;
-
-  return {
-    input: values.input as string | undefined,
-    output: values.output as string,
-    proxy,
-    userRules: values["user-rules"] as string | undefined,
-    help: values.help as boolean,
+  const args = Deno.args;
+  const options: Options = {
+    output: "pac.txt",
+    help: false,
   };
-}
 
-async function fetchGFWList(url: string, proxyUrl?: string): Promise<string> {
-  console.log(`正在从 ${url} 下载 GFWList...`);
-  if (proxyUrl) {
-    console.log(`使用代理: ${proxyUrl}`);
+  for (let i = 0; i < args.length; i++) {
+    switch (args[i]) {
+      case "-i":
+      case "--input":
+        options.input = args[++i];
+        break;
+      case "-o":
+      case "--output":
+        options.output = args[++i];
+        break;
+      case "-p":
+      case "--proxy":
+        options.proxy = args[++i];
+        break;
+      case "--user-rules":
+        options.userRules = args[++i];
+        break;
+      case "-h":
+      case "--help":
+        options.help = true;
+        break;
+      default:
+        if (args[i].startsWith("-")) {
+          console.error(`未知选项: ${args[i]}`);
+          printHelp();
+          Deno.exit(1);
+        }
+    }
   }
 
-  const fetchOptions: RequestInit = {};
+  // 优先级: 命令行参数 > 环境变量
+  if (!options.proxy) {
+    options.proxy = Deno.env.get("HTTPS_PROXY") ||
+      Deno.env.get("HTTP_PROXY") ||
+      Deno.env.get("ALL_PROXY") ||
+      Deno.env.get("https_proxy") ||
+      Deno.env.get("http_proxy") ||
+      Deno.env.get("all_proxy");
+  }
 
-  // Deno 原生支持通过环境变量或 Deno.createHttpClient 设置代理
-  // 这里通过设置环境变量的方式让 fetch 自动使用代理
+  return options;
+}
+
+async function detectProxy(): Promise<string | undefined> {
+  for (const port of [1080, 10809, 10808, 7890, 7891]) {
+    try {
+      const conn = await Deno.connect({ hostname: "127.0.0.1", port });
+      conn.close();
+      return `http://127.0.0.1:${port}`;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+function isIP(s: string): boolean {
+  return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(s);
+}
+
+function isCIDR(s: string): boolean {
+  return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/.test(s);
+}
+
+async function fetchGFWList(proxyUrl?: string): Promise<string> {
+  console.log(`正在从 ${GFWLIST_URL} 下载 GFWList...`);
+
   if (proxyUrl) {
+    console.log(`使用代理: ${proxyUrl}`);
     Deno.env.set("HTTP_PROXY", proxyUrl);
     Deno.env.set("HTTPS_PROXY", proxyUrl);
   }
 
-  const response = await fetch(url, fetchOptions);
+  const response = await fetch(GFWLIST_URL);
   if (!response.ok) {
     throw new Error(`下载失败: ${response.status} ${response.statusText}`);
   }
   const base64Content = await response.text();
   console.log("下载完成，正在解码...");
-  return atob(base64Content.trim());
+
+  const binStr = atob(base64Content.trim());
+  const codeUnits = new Uint8Array(binStr.length);
+  for (let i = 0; i < binStr.length; i++) {
+    codeUnits[i] = binStr.charCodeAt(i);
+  }
+  return new TextDecoder("utf-8").decode(codeUnits);
 }
 
 async function readLocalGFWList(filePath: string): Promise<string> {
   console.log(`正在读取本地文件: ${filePath}`);
-  const content = await fs.readFile(filePath, { encoding: "utf-8" });
-  // 判断是否是 base64 编码
+  const content = await Deno.readTextFile(filePath);
   const trimmed = content.trim();
+
+  // 判断是否是 base64 编码
   if (/^[A-Za-z0-9+/=\s]+$/.test(trimmed) && !trimmed.includes("||")) {
     console.log("检测到 Base64 编码，正在解码...");
-    return atob(trimmed.replace(/\s/g, ""));
+    const binStr = atob(trimmed.replace(/\s/g, ""));
+    const codeUnits = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) {
+      codeUnits[i] = binStr.charCodeAt(i);
+    }
+    return new TextDecoder("utf-8").decode(codeUnits);
   }
   return content;
 }
 
 async function readUserRules(filePath: string): Promise<string[]> {
   console.log(`正在读取用户规则: ${filePath}`);
-  const content = await fs.readFile(filePath, { encoding: "utf-8" });
-  return content.split("\n").filter((line) => line.trim());
+  const content = await Deno.readTextFile(filePath);
+  return content.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("!"));
 }
 
-function parseGFWListRules(content: string): ParsedRules {
+function parseGfwlist(text: string, isUserRule: boolean): ParsedRules {
   const rules: ParsedRules = {
-    domains: new Set(),
-    domainSuffixes: new Set(),
-    domainKeywords: new Set(),
-    urlPatterns: new Set(),
-    regexPatterns: new Set(),
-    whiteDomains: new Set(),
-    whiteDomainSuffixes: new Set(),
+    whitelistDomains: [],
+    whitelistUrlPatterns: [],
+    whitelistRegex: [],
+    proxyDomains: [],
+    proxyUrlPatterns: [],
+    proxyRegex: [],
+    proxyIps: [],
+    proxyCidrs: [],
   };
 
-  const lines = content.split("\n");
+  const lines = text.split("\n");
   let processedCount = 0;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
+    if (!line) continue;
 
-    // 跳过空行和注释
-    if (!line || line.startsWith("!") || line.startsWith("[")) {
+    // 跳过注释和节头
+    if (line.startsWith("!") || (line.startsWith("[") && line.endsWith("]"))) {
       continue;
     }
 
     processedCount++;
-    let rule = line;
-    let isWhite = false;
 
-    // 处理白名单规则
-    if (rule.startsWith("@@")) {
-      isWhite = true;
-      rule = rule.substring(2);
-    }
-
-    // 处理正则表达式规则
-    if (rule.startsWith("/") && rule.endsWith("/")) {
-      rules.regexPatterns.add(rule.slice(1, -1));
+    // 用户规则若不包含特殊标记，直接视为域名
+    if (isUserRule && !line.startsWith("@@") && !line.startsWith("||") &&
+        !line.startsWith("|") && !line.startsWith("/") && !line.startsWith(".") &&
+        !line.includes("*") && !line.includes("^")) {
+      const domain = line.replace(/\^$/, "");
+      if (isValidDomain(domain)) {
+        rules.proxyDomains.push(domain.toLowerCase());
+      }
       continue;
     }
 
-    // 处理域名后缀规则: ||domain.com
+    const isWhitelist = line.startsWith("@@");
+    const content = isWhitelist ? line.slice(2).trim() : line;
+
+    // 正则: /pattern/
+    const regexMatch = content.match(/^\/(.+)\/$/);
+    if (regexMatch) {
+      if (isWhitelist) {
+        rules.whitelistRegex.push(regexMatch[1]);
+      } else {
+        rules.proxyRegex.push(regexMatch[1]);
+      }
+      continue;
+    }
+
+    // 去掉尾部的 ^ (AutoProxy 分隔符)
+    const rule = content.replace(/\^$/, "");
+
+    // IP / CIDR
+    if (isCIDR(rule)) {
+      rules.proxyCidrs.push(rule);
+      continue;
+    }
+    if (isIP(rule)) {
+      rules.proxyIps.push(rule);
+      continue;
+    }
+
+    // ||domain.com 或 ||domain.com/path
     if (rule.startsWith("||")) {
-      const domain = rule.substring(2).split("/")[0].split("^")[0];
-      if (domain) {
-        if (isValidDomain(domain)) {
-          if (isWhite) {
-            rules.whiteDomainSuffixes.add(domain.toLowerCase());
+      const rest = rule.slice(2);
+      const slashIdx = rest.indexOf("/");
+      if (slashIdx === -1) {
+        // ||domain.com — 纯域名
+        const d = rest.replace(/\|$/, "");
+        if (isValidDomain(d) || isIP(d)) {
+          if (isWhitelist) {
+            rules.whitelistDomains.push(d.toLowerCase());
           } else {
-            rules.domainSuffixes.add(domain.toLowerCase());
+            rules.proxyDomains.push(d.toLowerCase());
           }
-        } else if (/^[a-zA-Z0-9][-a-zA-Z0-9]*$/.test(domain)) {
-          // 像 ||google 这样的不完整域名，当作关键词处理
-          rules.domainKeywords.add(domain.toLowerCase());
+        }
+      } else {
+        // ||domain.com/path — URL 模式
+        const domainPart = rest.slice(0, slashIdx);
+        const pathPart = rest.slice(slashIdx);
+        if (isValidDomain(domainPart)) {
+          const pattern = "*" + domainPart + pathPart;
+          if (isWhitelist) {
+            rules.whitelistUrlPatterns.push(pattern);
+          } else {
+            rules.proxyUrlPatterns.push(pattern);
+          }
         }
       }
       continue;
     }
 
-    // 处理 .domain.com 格式（域名后缀匹配）
+    // 以 . 开头: .domain.com
     if (rule.startsWith(".")) {
-      const domain = rule.substring(1).split("/")[0].split("^")[0];
+      const domain = rule.slice(1).split("/")[0];
       if (domain && isValidDomain(domain)) {
-        if (isWhite) {
-          rules.whiteDomainSuffixes.add(domain.toLowerCase());
+        if (isWhitelist) {
+          rules.whitelistDomains.push(domain.toLowerCase());
         } else {
-          rules.domainSuffixes.add(domain.toLowerCase());
+          rules.proxyDomains.push(domain.toLowerCase());
         }
       }
       continue;
     }
 
-    // 处理精确域名规则: |http://domain.com
+    // 以 | 开头: |domain.com 或 |http://...
     if (rule.startsWith("|")) {
-      const urlMatch = rule.substring(1).match(
-        /^https?:\/\/([^\/\^]+)/i
-      );
-      if (urlMatch) {
-        const domain = urlMatch[1];
-        if (isValidDomain(domain)) {
-          if (isWhite) {
-            rules.whiteDomains.add(domain.toLowerCase());
-          } else {
-            rules.domains.add(domain.toLowerCase());
-          }
-        }
-      }
-      continue;
-    }
-
-    // 处理关键词规则（纯字母数字和点的简单模式）
-    if (/^[a-zA-Z0-9][-a-zA-Z0-9.]*[a-zA-Z0-9]$/.test(rule)) {
-      if (isValidDomain(rule)) {
-        if (isWhite) {
-          rules.whiteDomainSuffixes.add(rule.toLowerCase());
+      const r = rule.slice(1);
+      const exact = r.replace(/\|$/, "");
+      if (isValidDomain(exact)) {
+        if (isWhitelist) {
+          rules.whitelistDomains.push(exact.toLowerCase());
         } else {
-          rules.domainSuffixes.add(rule.toLowerCase());
+          rules.proxyDomains.push(exact.toLowerCase());
         }
       } else {
-        rules.domainKeywords.add(rule.toLowerCase());
+        // |http://... — 完整 URL 模式
+        let p = r;
+        if (p.endsWith("|")) p = p.slice(0, -1);
+        if (isWhitelist) {
+          rules.whitelistUrlPatterns.push(p);
+        } else {
+          rules.proxyUrlPatterns.push(p);
+        }
       }
       continue;
     }
 
-    // 其他 URL 模式
-    const domainMatch = rule.match(
-      /^(?:\*\.)?([a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,})/
-    );
-    if (domainMatch) {
-      const domain = domainMatch[1];
-      if (isWhite) {
-        rules.whiteDomainSuffixes.add(domain.toLowerCase());
+    // 纯域名 domain.com
+    if (isValidDomain(rule)) {
+      if (isWhitelist) {
+        rules.whitelistDomains.push(rule.toLowerCase());
       } else {
-        rules.domainSuffixes.add(domain.toLowerCase());
+        rules.proxyDomains.push(rule.toLowerCase());
       }
+      continue;
+    }
+
+    // 以 http 开头的 URL
+    if (rule.startsWith("http://") || rule.startsWith("https://")) {
+      if (isWhitelist) {
+        rules.whitelistUrlPatterns.push(rule);
+      } else {
+        rules.proxyUrlPatterns.push(rule);
+      }
+      continue;
+    }
+
+    // 包含 * 或 ? 的模式
+    if (rule.includes("*") || rule.includes("?")) {
+      const pattern = rule.startsWith("http://") || rule.startsWith("https://")
+        ? rule
+        : "*" + rule;
+      if (isWhitelist) {
+        rules.whitelistUrlPatterns.push(pattern);
+      } else {
+        rules.proxyUrlPatterns.push(pattern);
+      }
+      continue;
+    }
+
+    // 关键词形式的域名
+    if (/^[a-zA-Z0-9][-a-zA-Z0-9]*$/.test(rule)) {
+      rules.proxyDomains.push(rule.toLowerCase());
     }
   }
 
+  // 去重并排序
+  for (const key of Object.keys(rules) as (keyof ParsedRules)[]) {
+    rules[key] = [...new Set(rules[key])].sort((a, b) =>
+      a.toLowerCase().localeCompare(b.toLowerCase())
+    );
+  }
+
   console.log(`处理了 ${processedCount} 条规则`);
-  console.log(`  - 域名后缀: ${rules.domainSuffixes.size}`);
-  console.log(`  - 精确域名: ${rules.domains.size}`);
-  console.log(`  - 关键词: ${rules.domainKeywords.size}`);
-  console.log(`  - 白名单域名后缀: ${rules.whiteDomainSuffixes.size}`);
-  console.log(`  - 白名单精确域名: ${rules.whiteDomains.size}`);
+  console.log(`  - 代理域名: ${rules.proxyDomains.length}`);
+  console.log(`  - 代理 URL 模式: ${rules.proxyUrlPatterns.length}`);
+  console.log(`  - 代理正则: ${rules.proxyRegex.length}`);
+  console.log(`  - 代理 IP: ${rules.proxyIps.length}`);
+  console.log(`  - 代理 CIDR: ${rules.proxyCidrs.length}`);
+  console.log(`  - 白名单域名: ${rules.whitelistDomains.length}`);
+  console.log(`  - 白名单 URL 模式: ${rules.whitelistUrlPatterns.length}`);
+  console.log(`  - 白名单正则: ${rules.whitelistRegex.length}`);
 
   return rules;
 }
 
 function isValidDomain(domain: string): boolean {
-  // 简单的域名验证
-  return /^[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}$/.test(domain);
+  return /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/.test(domain);
+}
+
+function cidrToNetmask(cidr: string): [string, string] {
+  const [ip, prefixStr] = cidr.split("/");
+  const prefix = parseInt(prefixStr);
+  const mask = ~0 << (32 - prefix);
+  const parts = [
+    (mask >>> 24) & 0xFF,
+    (mask >>> 16) & 0xFF,
+    (mask >>> 8) & 0xFF,
+    mask & 0xFF,
+  ];
+  return [ip, parts.join(".")];
 }
 
 function generatePAC(rules: ParsedRules): string {
-  // 合并精确域名和域名后缀到代理列表
-  const proxyDomains = new Set<string>();
-  for (const d of rules.domains) {
-    proxyDomains.add(d);
+  const lines: string[] = [];
+
+  lines.push(`var proxy = '${PAC_PROXY_PLACEHOLDER}';`);
+  lines.push("");
+
+  // 生成各规则类型的 JS 数组
+  lines.push(`var whitelistDomains = ${JSON.stringify(rules.whitelistDomains)};`);
+  lines.push(`var whitelistUrlPatterns = ${JSON.stringify(rules.whitelistUrlPatterns)};`);
+  lines.push(`var whitelistRegex = ${JSON.stringify(rules.whitelistRegex)};`);
+  lines.push(`var proxyDomains = ${JSON.stringify(rules.proxyDomains)};`);
+  lines.push(`var proxyUrlPatterns = ${JSON.stringify(rules.proxyUrlPatterns)};`);
+  lines.push(`var proxyRegex = ${JSON.stringify(rules.proxyRegex)};`);
+  lines.push(`var proxyIps = ${JSON.stringify(rules.proxyIps)};`);
+
+  // CIDR 规则
+  const cidrEntries = rules.proxyCidrs.map((c) => {
+    const [ip, mask] = cidrToNetmask(c);
+    return `["${ip}","${mask}"]`;
+  });
+  lines.push(`var proxyCidrs = [${cidrEntries.join(",")}];`);
+  lines.push("");
+
+  // FindProxyForURL 函数
+  lines.push("function FindProxyForURL(url, host) {");
+
+  // 白名单 URL 模式
+  if (rules.whitelistUrlPatterns.length > 0) {
+    lines.push("  for (var i = 0; i < whitelistUrlPatterns.length; i++) {");
+    lines.push("    if (shExpMatch(url, whitelistUrlPatterns[i])) return 'DIRECT';");
+    lines.push("  }");
+    lines.push("");
   }
-  for (const d of rules.domainSuffixes) {
-    proxyDomains.add(d);
-  }
-  // 关键词也作为域名处理（会通过 endsWith 匹配）
-  for (const k of rules.domainKeywords) {
-    proxyDomains.add(k);
-  }
 
-  // 合并白名单精确域名和域名后缀
-  const whiteDomains = new Set<string>();
-  for (const d of rules.whiteDomains) {
-    whiteDomains.add(d);
-  }
-  for (const d of rules.whiteDomainSuffixes) {
-    whiteDomains.add(d);
+  // 白名单正则
+  if (rules.whitelistRegex.length > 0) {
+    lines.push("  for (var i = 0; i < whitelistRegex.length; i++) {");
+    lines.push("    if (new RegExp(whitelistRegex[i]).test(url)) return 'DIRECT';");
+    lines.push("  }");
+    lines.push("");
   }
 
-  // 排序域名列表
-  const sortedProxyDomains = Array.from(proxyDomains).sort();
-  const sortedWhiteDomains = Array.from(whiteDomains).sort();
+  // 白名单域名
+  if (rules.whitelistDomains.length > 0) {
+    lines.push("  for (var i = 0; i < whitelistDomains.length; i++) {");
+    lines.push("    var d = whitelistDomains[i];");
+    lines.push("    if (host == d || host.endsWith('.' + d)) return 'DIRECT';");
+    lines.push("  }");
+    lines.push("");
+  }
 
-  // 生成格式化的 PAC 脚本（与模板格式一致）
-  const formatDomainList = (domains: string[]): string => {
-    if (domains.length === 0) return "[]";
-    const lines = domains.map((d, i) => {
-      const comma = i < domains.length - 1 ? "," : "";
-      return `            "${d}"${comma}`;
-    });
-    return `[\n${lines.join("\n")}\n        ]`;
-  };
+  // 代理正则
+  if (rules.proxyRegex.length > 0) {
+    lines.push("  for (var i = 0; i < proxyRegex.length; i++) {");
+    lines.push("    if (new RegExp(proxyRegex[i]).test(url)) return proxy;");
+    lines.push("  }");
+    lines.push("");
+  }
 
-  const pac = `var proxy = '${PAC_PROXY_PLACEHOLDER}';
-var rules = [
-    [
-        ${formatDomainList(sortedWhiteDomains)},
-        ${formatDomainList(sortedProxyDomains)}
-    ],
-    [
-        [],
-        []
-    ]
-];
+  // 代理 URL 模式
+  if (rules.proxyUrlPatterns.length > 0) {
+    lines.push("  for (var i = 0; i < proxyUrlPatterns.length; i++) {");
+    lines.push("    if (shExpMatch(url, proxyUrlPatterns[i])) return proxy;");
+    lines.push("  }");
+    lines.push("");
+  }
 
-var lastRule = '';
+  // 代理域名
+  if (rules.proxyDomains.length > 0) {
+    lines.push("  for (var i = 0; i < proxyDomains.length; i++) {");
+    lines.push("    var d = proxyDomains[i];");
+    lines.push("    if (host == d || host.endsWith('.' + d)) return proxy;");
+    lines.push("  }");
+    lines.push("");
+  }
 
-function FindProxyForURL(url, host) {
-    for (var i = 0; i < rules.length; i++) {
-        ret = testHost(host, i);
-        if (ret != undefined)
-            return ret;
-    }
-    return 'DIRECT';
-}
+  // 代理 IP
+  if (rules.proxyIps.length > 0) {
+    lines.push("  if (host.indexOf('.') !== -1) {");
+    lines.push("    for (var i = 0; i < proxyIps.length; i++) {");
+    lines.push("      if (host == proxyIps[i]) return proxy;");
+    lines.push("    }");
+    lines.push("  }");
+    lines.push("");
+  }
 
-function testHost(host, index) {
-    for (var i = 0; i < rules[index].length; i++) {
-        for (var j = 0; j < rules[index][i].length; j++) {
-            lastRule = rules[index][i][j]
-            if (host == lastRule || host.endsWith('.' + lastRule))
-                return i % 2 == 0 ? 'DIRECT' : proxy;
-        }
-    }
-    lastRule = '';
-}
+  // CIDR
+  if (rules.proxyCidrs.length > 0) {
+    lines.push("  if (host.indexOf('.') !== -1) {");
+    lines.push("    var ip = dnsResolve(host);");
+    lines.push("    if (ip) {");
+    lines.push("      for (var i = 0; i < proxyCidrs.length; i++) {");
+    lines.push("        if (isInNet(ip, proxyCidrs[i][0], proxyCidrs[i][1])) return proxy;");
+    lines.push("      }");
+    lines.push("    }");
+    lines.push("  }");
+    lines.push("");
+  }
 
-// REF: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/endsWith
-if (!String.prototype.endsWith) {
-    String.prototype.endsWith = function(searchString, position) {
-        var subjectString = this.toString();
-        if (typeof position !== 'number' || !isFinite(position) || Math.floor(position) !== position || position > subjectString.length) {
-            position = subjectString.length;
-        }
-        position -= searchString.length;
-        var lastIndex = subjectString.indexOf(searchString, position);
-        return lastIndex !== -1 && lastIndex === position;
-  };
-}
-`;
+  lines.push("  return 'DIRECT';");
+  lines.push("}");
+  lines.push("");
 
-  return pac;
+  // String.prototype.endsWith polyfill
+  lines.push(
+    "if (!String.prototype.endsWith) { String.prototype.endsWith = function(s,p) { var t=this.toString(); if(typeof p!=='number'||!isFinite(p)||Math.floor(p)!==p||p>t.length) p=t.length; p-=s.length; var i=t.indexOf(s,p); return i!==-1&&i===p; }; }",
+  );
+
+  return lines.join("\n");
 }
 
 async function main(): Promise<void> {
@@ -392,72 +544,62 @@ async function main(): Promise<void> {
     if (options.input) {
       gfwlistContent = await readLocalGFWList(options.input);
     } else {
-      gfwlistContent = await fetchGFWList(GFWLIST_URL, options.proxy);
+      // 自动检测代理
+      if (!options.proxy) {
+        const detected = await detectProxy();
+        if (detected) {
+          console.log(`自动检测到本地代理: ${detected}`);
+          options.proxy = detected;
+        }
+      }
+      gfwlistContent = await fetchGFWList(options.proxy);
     }
 
     // 读取用户自定义规则
+    const userRulesPath = options.userRules ?? "user-rules.txt";
     let userRulesContent: string[] = [];
-    const userRulesPath = options.userRules ?? path.join(Deno.cwd(), "user-rules.txt");
 
     try {
-      await fs.access(userRulesPath);
+      await Deno.stat(userRulesPath);
       userRulesContent = await readUserRules(userRulesPath);
     } catch {
       if (options.userRules) {
-        // 用户明确指定了文件但不存在，报错
         throw new Error(`用户规则文件不存在: ${userRulesPath}`);
       }
       // 默认文件不存在，静默跳过
     }
 
-    // 合并规则
-    const allContent =
-      gfwlistContent + "\n" + userRulesContent.join("\n");
+    // 解析 GFWList 规则
+    console.log("正在解析 GFWList 规则...");
+    const rules = parseGfwlist(gfwlistContent, false);
 
-    // 解析规则
-    console.log("正在解析规则...");
-    const rules = parseGFWListRules(allContent);
+    // 解析用户规则（合并）
+    if (userRulesContent.length > 0) {
+      console.log("正在解析用户规则...");
+      const userRules = parseGfwlist(userRulesContent.join("\n"), true);
+      // 合并用户规则到主规则集
+      for (const key of Object.keys(rules) as (keyof ParsedRules)[]) {
+        rules[key].push(...userRules[key]);
+        rules[key] = [...new Set(rules[key])].sort((a, b) =>
+          a.toLowerCase().localeCompare(b.toLowerCase())
+        );
+      }
+    }
 
     // 生成 PAC 文件
     console.log("正在生成 PAC 文件...");
     const pacContent = generatePAC(rules);
 
-    // 压缩 PAC 文件
-    console.log("正在压缩 PAC 文件...");
-    const minified = await minify(pacContent, {
-      compress: {
-        dead_code: true,
-        drop_console: false,
-        passes: 2,
-      },
-      mangle: {
-        toplevel: false,  // 保留顶层变量名（proxy, rules, FindProxyForURL）
-        reserved: ["FindProxyForURL", "proxy", "rules"],  // 保留 PAC 必需的名称
-      },
-      format: {
-        comments: false,
-      },
-    });
-
-    if (!minified.code) {
-      throw new Error("压缩失败");
-    }
-
     // 写入文件
-    const outputPath = path.resolve(options.output);
-    await fs.writeFile(outputPath, minified.code, { encoding: "utf-8" });
-    console.log(`PAC 文件已生成: ${outputPath}`);
-
-    // 输出统计信息
-    const originalSize = pacContent.length;
-    const compressedSize = minified.code.length;
-    console.log(`原始大小: ${(originalSize / 1024).toFixed(2)} KB`);
-    console.log(`压缩后大小: ${(compressedSize / 1024).toFixed(2)} KB`);
-    console.log(`压缩率: ${((1 - compressedSize / originalSize) * 100).toFixed(1)}%`);
+    await Deno.writeTextFile(options.output, pacContent);
+    console.log(`PAC 文件已生成: ${options.output}`);
+    console.log(`文件大小: ${(pacContent.length / 1024).toFixed(2)} KB`);
   } catch (error) {
     console.error("错误:", error instanceof Error ? error.message : error);
     Deno.exit(1);
   }
 }
 
-main();
+if (import.meta.main) {
+  main();
+}

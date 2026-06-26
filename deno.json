@@ -1,14 +1,27 @@
 {
   "imports": {
-    "@std/assert": "jsr:@std/assert@1",
-    "terser": "npm:terser@5"
+    "@std/assert": "jsr:@std/assert@1"
   },
   "permissions": {
     "default": {
-      "net": ["raw.githubusercontent.com"],
+      "net": [
+        "raw.githubusercontent.com",
+        "127.0.0.1:1080",
+        "127.0.0.1:10808",
+        "127.0.0.1:10809",
+        "127.0.0.1:7890",
+        "127.0.0.1:7891"
+      ],
       "read": ["."],
       "write": ["."],
-      "env": true
+      "env": [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy"
+      ]
     }
   },
   "tasks": {

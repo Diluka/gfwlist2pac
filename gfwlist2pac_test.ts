@@ -7,10 +7,25 @@
 
 import { assertEquals } from "@std/assert";
 
+// shExpMatch 的简易实现 — PAC 标准函数，用于 shell 表达式匹配
+// 支持 * (匹配任意字符序列) 和 ? (匹配单个字符)
+function shExpMatch(str: string, pattern: string): boolean {
+  const regexStr = "^" + pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".") + "$";
+  return new RegExp(regexStr).test(str);
+}
+
 // 模拟 PAC 运行环境并执行 FindProxyForURL
 function createPacContext(pacContent: string): (url: string, host: string) => string {
   // 在隔离环境中执行 PAC 脚本
-  const fn = new Function(pacContent + ";return FindProxyForURL;")();
+  const fn = new Function(
+    "shExpMatch",
+    "dnsResolve",
+    "isInNet",
+    pacContent + ";return FindProxyForURL;"
+  )(shExpMatch, () => "", () => false);
   return fn as (url: string, host: string) => string;
 }
 
@@ -169,9 +184,9 @@ Deno.test("未知域名应直连", async () => {
 Deno.test("PAC 变量结构完整性", async () => {
   const pacContent = await Deno.readTextFile("pac.txt");
 
-  // 验证 PAC 文件的必要元素存在（压缩后格式可能变化）
+  // 验证 PAC 文件的必要元素存在
   assertEquals(pacContent.includes("__PROXY__"), true, "应包含代理占位符 __PROXY__");
   assertEquals(pacContent.includes("FindProxyForURL"), true, "应包含 FindProxyForURL 函数");
-  assertEquals(pacContent.includes("testHost"), true, "应包含 testHost 函数");
+  assertEquals(pacContent.includes("proxyDomains"), true, "应包含 proxyDomains 变量");
   assertEquals(pacContent.includes("DIRECT"), true, "应包含 DIRECT 返回值");
 });
