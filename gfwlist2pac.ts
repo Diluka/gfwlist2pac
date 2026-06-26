@@ -165,7 +165,7 @@ function isCIDR(s: string): boolean {
   return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/.test(s);
 }
 
-async function fetchGFWList(proxyUrl?: string): Promise<string> {
+async function fetchGFWList(proxyUrl?: string): Promise<{ content: string; timestamp: string }> {
   console.log(`正在从 ${GFWLIST_URL} 下载 GFWList...`);
 
   if (proxyUrl) {
@@ -179,18 +179,22 @@ async function fetchGFWList(proxyUrl?: string): Promise<string> {
     throw new Error(`下载失败: ${response.status} ${response.statusText}`);
   }
   const base64Content = await response.text();
-  console.log("下载完成，正在解码...");
+  const timestamp = response.headers.get("last-modified") || response.headers.get("date") || new Date().toUTCString();
+  console.log(`下载完成，数据时间: ${timestamp}，正在解码...`);
 
   const binStr = atob(base64Content.trim());
   const codeUnits = new Uint8Array(binStr.length);
   for (let i = 0; i < binStr.length; i++) {
     codeUnits[i] = binStr.charCodeAt(i);
   }
-  return new TextDecoder("utf-8").decode(codeUnits);
+  const content = new TextDecoder("utf-8").decode(codeUnits);
+  return { content, timestamp };
 }
 
-async function readLocalGFWList(filePath: string): Promise<string> {
+async function readLocalGFWList(filePath: string): Promise<{ content: string; timestamp: string }> {
   console.log(`正在读取本地文件: ${filePath}`);
+  const stat = await Deno.stat(filePath);
+  const timestamp = stat.mtime ? stat.mtime.toUTCString() : new Date().toUTCString();
   const content = await Deno.readTextFile(filePath);
   const trimmed = content.trim();
 
@@ -202,9 +206,10 @@ async function readLocalGFWList(filePath: string): Promise<string> {
     for (let i = 0; i < binStr.length; i++) {
       codeUnits[i] = binStr.charCodeAt(i);
     }
-    return new TextDecoder("utf-8").decode(codeUnits);
+    const decoded = new TextDecoder("utf-8").decode(codeUnits);
+    return { content: decoded, timestamp };
   }
-  return content;
+  return { content, timestamp };
 }
 
 async function readUserRules(filePath: string): Promise<string[]> {
@@ -419,27 +424,40 @@ function cidrToNetmask(cidr: string): [string, string] {
   return [ip, parts.join(".")];
 }
 
-function generatePAC(rules: ParsedRules): string {
+function formatArray(items: string[]): string {
+  if (items.length === 0) return "[]";
+  return "[\n" + items.map((item) => `  ${JSON.stringify(item)}`).join(",\n") + "\n]";
+}
+
+function generatePAC(rules: ParsedRules, gfwlistTimestamp: string): string {
   const lines: string[] = [];
 
+  lines.push("// GFWList to PAC");
+  lines.push(`// GFWList 数据更新于: ${gfwlistTimestamp}`);
+  lines.push(`// 生成时间: ${new Date().toUTCString()}`);
+  lines.push("");
   lines.push(`var proxy = '${PAC_PROXY_PLACEHOLDER}';`);
   lines.push("");
 
-  // 生成各规则类型的 JS 数组
-  lines.push(`var whitelistDomains = ${JSON.stringify(rules.whitelistDomains)};`);
-  lines.push(`var whitelistUrlPatterns = ${JSON.stringify(rules.whitelistUrlPatterns)};`);
-  lines.push(`var whitelistRegex = ${JSON.stringify(rules.whitelistRegex)};`);
-  lines.push(`var proxyDomains = ${JSON.stringify(rules.proxyDomains)};`);
-  lines.push(`var proxyUrlPatterns = ${JSON.stringify(rules.proxyUrlPatterns)};`);
-  lines.push(`var proxyRegex = ${JSON.stringify(rules.proxyRegex)};`);
-  lines.push(`var proxyIps = ${JSON.stringify(rules.proxyIps)};`);
+  // 生成各规则类型的 JS 数组（每行一项）
+  lines.push(`var whitelistDomains = ${formatArray(rules.whitelistDomains)};`);
+  lines.push(`var whitelistUrlPatterns = ${formatArray(rules.whitelistUrlPatterns)};`);
+  lines.push(`var whitelistRegex = ${formatArray(rules.whitelistRegex)};`);
+  lines.push(`var proxyDomains = ${formatArray(rules.proxyDomains)};`);
+  lines.push(`var proxyUrlPatterns = ${formatArray(rules.proxyUrlPatterns)};`);
+  lines.push(`var proxyRegex = ${formatArray(rules.proxyRegex)};`);
+  lines.push(`var proxyIps = ${formatArray(rules.proxyIps)};`);
 
   // CIDR 规则
   const cidrEntries = rules.proxyCidrs.map((c) => {
     const [ip, mask] = cidrToNetmask(c);
-    return `["${ip}","${mask}"]`;
+    return `  ["${ip}","${mask}"]`;
   });
-  lines.push(`var proxyCidrs = [${cidrEntries.join(",")}];`);
+  if (cidrEntries.length === 0) {
+    lines.push("var proxyCidrs = [];");
+  } else {
+    lines.push("var proxyCidrs = [\n" + cidrEntries.join(",\n") + "\n];");
+  }
   lines.push("");
 
   // FindProxyForURL 函数
@@ -540,9 +558,9 @@ async function main(): Promise<void> {
 
   try {
     // 获取 GFWList 内容
-    let gfwlistContent: string;
+    let gfwlistResult: { content: string; timestamp: string };
     if (options.input) {
-      gfwlistContent = await readLocalGFWList(options.input);
+      gfwlistResult = await readLocalGFWList(options.input);
     } else {
       // 自动检测代理
       if (!options.proxy) {
@@ -552,8 +570,9 @@ async function main(): Promise<void> {
           options.proxy = detected;
         }
       }
-      gfwlistContent = await fetchGFWList(options.proxy);
+      gfwlistResult = await fetchGFWList(options.proxy);
     }
+    const gfwlistContent = gfwlistResult.content;
 
     // 读取用户自定义规则
     const userRulesPath = options.userRules ?? "user-rules.txt";
@@ -587,8 +606,11 @@ async function main(): Promise<void> {
     }
 
     // 生成 PAC 文件
+    const gfwTimestamp = gfwlistResult.timestamp;
+
+    // 生成 PAC 文件
     console.log("正在生成 PAC 文件...");
-    const pacContent = generatePAC(rules);
+    const pacContent = generatePAC(rules, gfwTimestamp);
 
     // 写入文件
     await Deno.writeTextFile(options.output, pacContent);

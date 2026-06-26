@@ -1,3 +1,6 @@
 node_modules
 pac.txt
 user-rules.txt
+
+# Docker Compose 输出目录
+output/

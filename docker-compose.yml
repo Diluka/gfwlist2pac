@@ -1,0 +1,20 @@
+services:
+  gfwlist2pac:
+    build: .
+    container_name: gfwlist2pac
+    restart: unless-stopped
+    environment:
+      # Cron 执行计划，默认每 6 小时执行一次
+      # 标准 cron 格式: 分钟 小时 日 月 星期
+      - CRON_SCHEDULE=0 */6 * * *
+
+      # 下载代理（通过 host.docker.internal 访问宿主机代理）
+      - PROXY=http://host.docker.internal:1080
+
+      # 输出目录（容器内路径）
+      - OUTPUT_DIR=/app/output
+    volumes:
+      # 输入：挂载用户规则文件
+      - ./user-rules.txt:/app/user-rules.txt:ro
+      # 输出：挂载目录，生成的 pac.txt 和 last-run.log 在此
+      - ./output:/app/output
